@@ -1,9 +1,9 @@
 package mqtt
 
 import (
+	"bufio"
+	"fmt"
 	"io"
-
-	v5 "github.com/eclipse/paho.golang/packets"
 )
 
 type IMqttActionV3 interface {
@@ -14,39 +14,62 @@ type IMqttActionV3 interface {
 	OnDisconnected(*DisconnectMsg) error
 }
 
-type MQTTParserV3 struct {
-	reader io.Reader
+type MQTTCodec struct {
+	reader bufio.Reader
+	writer bufio.Writer
 	cb     IMqttActionV3
-	buf    [128]byte
-	// bufDataStart和bufDataEnd用来表示buf所存放的可用数据的开始和结束地址
-	// 当数据被使用以后, bufDataStart不会断的向后移动。
-	bufDataStart int
-	bufDataEnd   int
 }
 
-func NewMQTTParser(reader io.Reader) *MQTTParserV3 {
-	v3 := &MQTTParserV3{reader: reader}
+func NewMQTTParser(reader io.Reader) *MQTTCodec {
+	//create buffer io with default buffer size(4K)
+	v3 := &MQTTCodec{reader: *bufio.NewReader(reader)}
 	return v3
 }
 
-func (p *MQTTParserV3) Process() error {
-	v5.ReadPacket(p.reader)
+func (p *MQTTCodec) Process() error {
 }
 
-func (p *MQTTParserV3) readVarLength() (int, error) {
-	msb := true
-	buffer := p.buf[:]
-	for msb {
-
+func (p *MQTTCodec) readVarLength() (int, error) {
+	count := 0
+	var multiplier int = 1
+	var value int
+	var digit byte = 128
+	for (digit&128) != 0 && count < 4 {
+		digit, err := p.reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		value += int(digit&127) * multiplier
+		multiplier *= 128
+		count++
 	}
-}
 
-func (p *MQTTParserV3) read16BitLength() (uint16, error) {
-
-}
-
-func (p *MQTTParserV3) readRawData(wanted int) ([]byte, error) {
-	if p.bufDataEnd <= p.bufDataStart || (p.bufDataEnd-p.bufDataStart) < wanted {
-		//read more data into buffer due to data insufficient
+	if digit&128 != 0 {
+		return 0, fmt.Errorf("bad encodings, more than 4 bytes used to represent a number")
 	}
+	return value, nil
+}
+
+func (p *MQTTCodec) writeVarLength(data int) error {
+	if data > 268435455 {
+		return fmt.Errorf("data too huge to encoding: %d", data)
+	}
+	var buf [1]byte
+	for data > 0 {
+		digit := byte(data % 128)
+		data = data / 128
+		if data > 0 {
+			digit = digit | 0x80
+		}
+		buf[0] = digit
+		_, err := p.writer.Write(buf[:])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *MQTTCodec) read16BitLength() (uint16, error) {
+
 }
